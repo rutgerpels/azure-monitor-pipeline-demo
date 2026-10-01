@@ -11,7 +11,49 @@ var streams = [
   { name: 'filtered', port: 1516, format: 'syslogRfc5424', stream: 'Custom-NetworkDemoFiltered' }
 ]
 var filteredFields = ['TimeGenerated', 'RunId', 'Sequence', 'Device', 'Message']
+// Built-in processors populate attributes; every exporter still needs an explicit record map.
+// https://learn.microsoft.com/azure/azure-monitor/data-collection/pipeline-configure-cli
+var syslogFields = [
+  'CollectorHostName', 'Computer', 'EventTime', 'Facility', 'HostIP', 'HostName'
+  'ProcessID', 'ProcessName', 'SeverityLevel', 'SourceSystem', 'SyslogMessage', 'TimeGenerated'
+]
+var cefFields = [
+  'Computer', 'TimeGenerated', 'CollectorHostName', 'DeviceVendor', 'DeviceProduct', 'DeviceVersion'
+  'DeviceEventClassID', 'Activity', 'LogSeverity', 'OriginalLogSeverity', 'AdditionalExtensions'
+  'ApplicationProtocol', 'EventCount', 'DestinationDnsDomain', 'DestinationServiceName'
+  'DestinationTranslatedAddress', 'DestinationTranslatedPort', 'CommunicationDirection', 'DeviceDnsDomain'
+  'DeviceExternalID', 'DeviceFacility', 'DeviceInboundInterface', 'DeviceName', 'DeviceNtDomain'
+  'DeviceOutboundInterface', 'DevicePayloadId', 'ProcessName', 'DeviceTranslatedAddress'
+  'DestinationHostName', 'DestinationMACAddress', 'DestinationNTDomain', 'DestinationProcessId'
+  'DestinationUserPrivileges', 'DestinationProcessName', 'DestinationPort', 'DestinationIP', 'DeviceTimeZone'
+  'DestinationUserID', 'DestinationUserName', 'DeviceAddress', 'DeviceMacAddress', 'ProcessID', 'ExternalID', 'ExtID'
+  'FileCreateTime', 'FileHash', 'FileID', 'FileModificationTime', 'FilePath', 'FilePermission', 'FileType'
+  'FileName', 'FileSize', 'ReceivedBytes', 'Message', 'OldFileCreateTime', 'OldFileHash', 'OldFileID'
+  'OldFileModificationTime', 'OldFileName', 'OldFilePath', 'OldFilePermission', 'OldFileSize', 'OldFileType'
+  'SentBytes', 'EventOutcome', 'Protocol', 'Reason', 'RequestURL', 'RequestClientApplication', 'RequestContext'
+  'RequestCookies', 'RequestMethod', 'ReceiptTime', 'SourceHostName', 'SourceMACAddress', 'SourceNTDomain'
+  'SourceDnsDomain', 'SourceServiceName', 'SourceTranslatedAddress', 'SourceTranslatedPort', 'SourceProcessId'
+  'SourceUserPrivileges', 'SourceProcessName', 'SourcePort', 'SourceIP', 'SourceUserID', 'SourceUserName'
+  'EventType', 'DeviceEventCategory', 'DeviceCustomIPv6Address1', 'DeviceCustomIPv6Address1Label'
+  'DeviceCustomIPv6Address2', 'DeviceCustomIPv6Address2Label', 'DeviceCustomIPv6Address3'
+  'DeviceCustomIPv6Address3Label', 'DeviceCustomIPv6Address4', 'DeviceCustomIPv6Address4Label'
+  'DeviceCustomFloatingPoint1', 'DeviceCustomFloatingPoint1Label', 'DeviceCustomFloatingPoint2'
+  'DeviceCustomFloatingPoint2Label', 'DeviceCustomFloatingPoint3', 'DeviceCustomFloatingPoint3Label'
+  'DeviceCustomFloatingPoint4', 'DeviceCustomFloatingPoint4Label', 'DeviceCustomNumber1'
+  'FieldDeviceCustomNumber1', 'DeviceCustomNumber1Label', 'DeviceCustomNumber2', 'FieldDeviceCustomNumber2'
+  'DeviceCustomNumber2Label', 'DeviceCustomNumber3', 'FieldDeviceCustomNumber3', 'DeviceCustomNumber3Label'
+  'DeviceCustomString1', 'DeviceCustomString1Label', 'DeviceCustomString2', 'DeviceCustomString2Label'
+  'DeviceCustomString3', 'DeviceCustomString3Label', 'DeviceCustomString4', 'DeviceCustomString4Label'
+  'DeviceCustomString5', 'DeviceCustomString5Label', 'DeviceCustomString6', 'DeviceCustomString6Label'
+  'DeviceCustomDate1', 'DeviceCustomDate1Label', 'DeviceCustomDate2', 'DeviceCustomDate2Label'
+  'FlexDate1', 'FlexDate1Label', 'FlexNumber1', 'FlexNumber1Label', 'FlexNumber2', 'FlexNumber2Label'
+  'FlexString1', 'FlexString1Label', 'FlexString2', 'FlexString2Label', 'DeviceAction'
+  'SimplifiedDeviceAction', 'RemoteIP', 'RemotePort', 'SourceSystem'
+]
+var syslogMap = [for field in syslogFields: { from: 'attributes.${field}', to: field }]
+var cefMap = [for field in cefFields: { from: 'attributes.${field}', to: field }]
 var filteredMap = [for field in filteredFields: { from: 'attributes.${field}', to: field }]
+var recordMaps = { baseline: syslogMap, cef: cefMap, filtered: filteredMap }
 
 resource pipeline 'Microsoft.Monitor/pipelineGroups@2026-04-01' = {
   name: '${name}-pipeline'
@@ -46,13 +88,12 @@ resource pipeline 'Microsoft.Monitor/pipelineGroups@2026-04-01' = {
       name: '${item.name}-exporter'
       type: 'AzureMonitorWorkspaceLogs'
       azureMonitorWorkspaceLogs: {
-        api: union({
+        api: {
           dataCollectionEndpointUrl: endpointUrl
           dataCollectionRule: ruleId
           stream: item.stream
-        }, item.name == 'filtered' ? {
-          schema: { recordMap: filteredMap }
-        } : {})
+          schema: { recordMap: recordMaps[item.name] }
+        }
         persistence: { maxStorageUsage: 1, retentionPeriod: 120 }
       }
     }]

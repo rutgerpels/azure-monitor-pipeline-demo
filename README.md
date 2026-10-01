@@ -10,11 +10,15 @@ table available. There are no agents on the simulated switches or firewalls.
 > Use `Test-Demo.ps1 -Scene All -RestartCollector` before presenting.
 
 **Live validation status (2026-10-01): blocked, not presentation-ready.**
-The Azure foundation and K3s/NFS bootstrap were deployed successfully in West
-Europe. The signed-in account could not read the tenant's Custom Locations
-service-principal object ID, so Arc/pipeline deployment and all four end-to-end
-scenes remain unverified. Obtain `-CustomLocationsOid` as described below before
-continuing. Offline tests are not a substitute for a successful live rehearsal.
+The directory-permission blocker is resolved. The West Europe foundation,
+K3s/NFS, Arc connectivity, Custom Locations, certificate extension `1.2.0`,
+pipeline extension `1.7.0`, and DCE/DCR were deployed successfully. Pipeline
+creation remains blocked: its root CA certificates are Ready, but the managed
+`arc-amp-root-ca-current` and `arc-amp-client-root-ca-current` secrets are missing,
+leaving their ClusterIssuers unready. An operator restart did not resolve this.
+All four end-to-end scenes remain unverified. Diagnostics are saved locally;
+the failed disposable deployment was removed to avoid ongoing charges.
+Offline tests are not a substitute for a successful live rehearsal.
 
 ## Architecture and scope
 
@@ -92,6 +96,9 @@ and automatic upgrades disabled; pass `-CertificateVersion` on subsequent fresh
 deployments to reproduce it. The Ubuntu image resolves `latest` at initial
 creation; capture the resolved image version from Azure for an exact rebuild.
 Do not upgrade collectors or change replica count while buffered data remains.
+Bootstrap raises `fs.inotify.max_user_instances` to at least `1024`, persistently,
+because the co-located Arc and certificate sidecars exhausted Ubuntu's default
+`128` during live deployment. Higher existing limits are preserved.
 
 ## Deploy
 
@@ -113,7 +120,8 @@ in `/var/tmp/pipeline-demo-*.log`; JSON evidence transfers are length-checked.
 
 The script runs Bicep what-if before
 each deployment, bootstraps the cluster, connects Arc, installs extensions,
-creates DCE/DCR and scoped RBAC, deploys pipeline and diagnostics, and sends a
+checks that the managed certificate issuers are Ready, creates DCE/DCR and scoped
+RBAC, deploys pipeline and diagnostics, and sends a
 real Syslog/CEF canary. Provision before the customer meeting.
 
 The resource group is `rg-<Name>`. State, SSH key, kubeconfig, manifests, and
@@ -208,6 +216,13 @@ can obtain the nonsecret service-principal object ID with
 Pass the returned GUID as `-CustomLocationsOid`. The fixed application ID is
 **not** the tenant-specific object ID and cannot be substituted for it.
 
+If the certificate readiness check fails, inspect the returned ClusterIssuer
+conditions. Extension `Succeeded` alone is insufficient. In the latest attempt,
+cert-manager reported `ErrGetKeyPair` for the missing managed current-CA secrets,
+despite successful issuance of the root certificates. Resolve this certificate
+initialization issue with Azure support before another customer rehearsal.
+Do not manually copy private keys or patch managed issuers to mask the failure.
+
 If deployment or ingestion fails live, show the last successful rehearsal's
 saved run ID and source configuration. Export screenshots or a short recording
 before the meeting. Clearly label all replayed evidence with its capture time.
@@ -241,3 +256,4 @@ Reviewed against Microsoft Learn on 2026-10-01:
 - [GA pipeline resource schema](https://learn.microsoft.com/azure/templates/microsoft.monitor/2026-04-01/pipelinegroups)
 - [VM Run Command restrictions](https://learn.microsoft.com/azure/virtual-machines/linux/run-command)
 - [Custom locations and explicit service object ID](https://learn.microsoft.com/azure/azure-arc/kubernetes/custom-locations)
+- [Single-node Ubuntu inotify limit guidance](https://learn.microsoft.com/azure/azure-arc/container-storage/quickstart-install)

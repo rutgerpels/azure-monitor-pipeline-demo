@@ -20,6 +20,41 @@ Assert-True $rejected 'SSH resume accepted the HTTPS-only loopback sentinel.'
 Assert-DemoManagementAccess $true '127.0.0.1/32'
 Assert-DemoManagementAccess $false '203.0.113.10/32'
 
+$deployAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path $PSScriptRoot '..\scripts\Deploy-Demo.ps1'), [ref]$null, [ref]$null)
+$cachedOidGuard = $deployAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.IfStatementAst] -and
+        $node.Extent.Text.Contains('$CustomLocationsOid = $state.customLocationsOid')
+}, $true)
+Assert-True ($null -ne $cachedOidGuard) 'Cannot find the deployment object-ID cache guard.'
+$cachedOidScript = [scriptblock]::Create($cachedOidGuard.Extent.Text)
+function Test-CachedObjectId {
+    param([string]$Recorded, [ValidatePattern('^[a-fA-F0-9-]{36}$')][string]$CustomLocationsOid)
+    $state = [pscustomobject]@{ customLocationsOid = $Recorded }
+    . $cachedOidScript
+    $CustomLocationsOid
+}
+$recordedOid = '00000000-0000-0000-0000-000000000001'
+$explicitOid = '00000000-0000-0000-0000-000000000002'
+Assert-True ([string]::IsNullOrEmpty((Test-CachedObjectId ''))) 'An empty cache should allow directory lookup.'
+Assert-True ((Test-CachedObjectId $recordedOid) -eq $recordedOid) 'Recorded object ID was not reused.'
+Assert-True ((Test-CachedObjectId $recordedOid $explicitOid) -eq $explicitOid) 'Explicit object ID was overwritten.'
+
+$issuerCheck = $deployAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.CommandAst] -and
+        $node.GetCommandName() -eq 'Invoke-DemoSsh' -and $node.Extent.Text.Contains('clusterissuer')
+}, $true)
+$pipelineDeployment = $deployAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.CommandAst] -and
+        $node.GetCommandName() -eq 'Invoke-DemoDeployment' -and $node.Extent.Text.Contains("'pipeline'")
+}, $true)
+Assert-True ($null -ne $issuerCheck -and $null -ne $pipelineDeployment) 'Certificate readiness guard or pipeline deployment is missing.'
+Assert-True ($issuerCheck.Extent.StartOffset -lt $pipelineDeployment.Extent.StartOffset) 'Certificate readiness must precede pipeline creation.'
+Assert-True ($issuerCheck.Extent.Text.Contains('--timeout=180s') -and $issuerCheck.Extent.Text.Contains('exit 1')) 'Certificate readiness must time out and fail explicitly.'
+
 $directory = Join-Path $PSScriptRoot "..\artifacts\orchestration-$([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory $directory -Force | Out-Null
 $state = [pscustomobject]@{

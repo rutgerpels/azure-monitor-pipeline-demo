@@ -5,6 +5,12 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq nfs-kernel-server nfs-common curl python3 nftables jq
 
+# Arc and certificate sidecars share the node's per-user inotify quota.
+if (( $(sysctl -n fs.inotify.max_user_instances) < 1024 )); then
+    printf '%s\n' 'fs.inotify.max_user_instances = 1024' > /etc/sysctl.d/90-pipeline-demo.conf
+    sysctl -p /etc/sysctl.d/90-pipeline-demo.conf
+fi
+
 if [[ ! -x /usr/local/bin/k3s ]]; then
     installer=$(mktemp)
     trap 'rm -f "$installer"' EXIT

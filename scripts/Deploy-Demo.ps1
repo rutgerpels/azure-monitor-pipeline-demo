@@ -72,7 +72,7 @@ Assert-DemoManagementAccess $state.useRunCommand $AdminCidr
 foreach ($property in @('customLocationsOid','bootstrapRoleId')) {
     if (-not $state.PSObject.Properties[$property]) { $state | Add-Member $property '' }
 }
-if (-not $CustomLocationsOid) { $CustomLocationsOid = $state.customLocationsOid }
+if (-not $CustomLocationsOid -and $state.customLocationsOid) { $CustomLocationsOid = $state.customLocationsOid }
 if (-not $CustomLocationsOid) {
     try {
         $CustomLocationsOid = (Invoke-Azure @('ad','sp','show','--id','bc313c14-388c-4e7d-a58e-70017303ee3b')).id
@@ -182,6 +182,14 @@ try {
         throw 'Installed pipeline version/train differs from recorded version. Refusing an implicit upgrade.'
     }
     if ($pipelineExtension.provisioningState -ne 'Succeeded') { throw 'Pipeline extension is not healthy.' }
+    # Extension provisioning can succeed while its managed certificate issuers are unready.
+    Invoke-DemoSsh $state @'
+if ! sudo k3s kubectl wait --for=condition=Ready clusterissuer arc-amp-root-ca-cluster-issuer arc-amp-client-root-ca-cluster-issuer --timeout=180s; then
+    sudo k3s kubectl get clusterissuer arc-amp-root-ca-cluster-issuer arc-amp-client-root-ca-cluster-issuer -o json | jq '[.items[] | {name:.metadata.name,conditions:.status.conditions}]'
+    echo 'Pipeline certificate issuers are not Ready; stopping before pipeline resource creation.' >&2
+    exit 1
+fi
+'@ | Out-Host
     $cluster = Invoke-Azure @('connectedk8s','show','--name',"$Name-arc",'--resource-group',$state.resourceGroup,'--subscription',$SubscriptionId)
     $custom = Invoke-Azure @('customlocation','create','--name',"$Name-location",'--resource-group',$state.resourceGroup,
         '--namespace','pipeline-demo','--host-resource-id',$cluster.id,'--cluster-extension-ids',$pipelineExtension.id,
