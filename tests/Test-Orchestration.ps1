@@ -44,7 +44,8 @@ Assert-True ((Test-CachedObjectId $recordedOid $explicitOid) -eq $explicitOid) '
 $issuerCheck = $deployAst.Find({
     param($node)
     $node -is [System.Management.Automation.Language.CommandAst] -and
-        $node.GetCommandName() -eq 'Invoke-DemoSsh' -and $node.Extent.Text.Contains('clusterissuer')
+        $node.GetCommandName() -eq 'Invoke-DemoSsh' -and
+        $node.Extent.Text.Contains('Pipeline certificate issuers are not Ready')
 }, $true)
 $pipelineDeployment = $deployAst.Find({
     param($node)
@@ -54,6 +55,26 @@ $pipelineDeployment = $deployAst.Find({
 Assert-True ($null -ne $issuerCheck -and $null -ne $pipelineDeployment) 'Certificate readiness guard or pipeline deployment is missing.'
 Assert-True ($issuerCheck.Extent.StartOffset -lt $pipelineDeployment.Extent.StartOffset) 'Certificate readiness must precede pipeline creation.'
 Assert-True ($issuerCheck.Extent.Text.Contains('--timeout=180s') -and $issuerCheck.Extent.Text.Contains('exit 1')) 'Certificate readiness must time out and fail explicitly.'
+$repairSwitch = $deployAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'AllowDemoCertificateRepair' }
+Assert-True ($null -ne $repairSwitch -and $null -eq $repairSwitch.DefaultValue) 'Certificate repair must be explicit, never enabled by default.'
+$repairGuard = $deployAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.IfStatementAst] -and
+        $node.Clauses[0].Item1.Extent.Text -eq '$AllowDemoCertificateRepair'
+}, $true)
+Assert-True ($null -ne $repairGuard) 'Missing opt-in repair guard.'
+$script:remoteCommands = @()
+function Invoke-DemoSsh {
+    param($State, [string]$Command)
+    $script:remoteCommands += $Command
+}
+$repairGuardScript = [scriptblock]::Create($repairGuard.Extent.Text)
+$AllowDemoCertificateRepair = $false
+$state = [pscustomobject]@{}
+. $repairGuardScript
+Assert-True (-not ($script:remoteCommands -match 'python3')) 'Default deployment invoked the repair.'
+Assert-True ([bool]($script:remoteCommands -match 'Explicitly pass AllowDemoCertificateRepair')) 'Default deployment must reject previously repaired clusters.'
+. "$PSScriptRoot\..\scripts\Common.ps1"
 
 $directory = Join-Path $PSScriptRoot "..\artifacts\orchestration-$([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory $directory -Force | Out-Null
@@ -67,6 +88,9 @@ function Invoke-Azure {
     param([string[]]$Arguments)
     $file = $Arguments[-1].TrimStart('@')
     $content = Get-Content $file -Raw
+    $encodedCommand = [regex]::Match($content, "printf '%s' '([A-Za-z0-9+/=]+)'").Groups[1].Value
+    $decodedCommand = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedCommand))
+    Assert-True (-not $decodedCommand.Contains("`r")) 'Guest command retained Windows line endings.'
     if ($content -notmatch 'DEMO_BEGIN_([a-f0-9]{32})') { throw 'Missing completion marker.' }
     $token = $Matches[1]
     [pscustomobject]@{ value = @([pscustomobject]@{
@@ -75,6 +99,7 @@ function Invoke-Azure {
 }
 try {
     Assert-True ((Invoke-DemoSsh $state 'echo hello') -eq 'hello') 'Run Command output was not extracted.'
+    Assert-True ((Invoke-DemoSsh $state "if true; then`r`necho hello`r`nfi") -eq 'hello') 'Multiline Windows guest command failed.'
     $script:remoteCode = 7
     $rejected = $false
     try { Invoke-DemoSsh $state 'exit 7' } catch { $rejected = $_.Exception.Message -match 'Remote command failed' }

@@ -135,6 +135,45 @@ outside this deployment workflow. A mismatched ownership
 tag prevents accidental adoption/deletion of another environment. To manage
 another demo, use a different `-StatePath`.
 
+### Optional temporary certificate repair
+
+Normal deployment stops if managed certificate initialization fails. For an
+explicitly approved, disposable demo only, add `-AllowDemoCertificateRepair`
+to the deploy command. Pass it again on every resume; consent is not cached.
+
+```powershell
+.\scripts\Deploy-Demo.ps1 `
+  -Name ampdemo01 `
+  -UseRunCommand `
+  -SubscriptionId "<subscription-guid>" `
+  -CertificateVersion 1.2.0 `
+  -AllowDemoCertificateRepair
+```
+
+The helper is restricted to pipeline `1.7.0` and Certificate Manager `1.2.0`.
+It first allows ordinary initialization to finish. If the known missing
+`*-current` Secret failure remains, it validates both source CA certificates
+and matching keys, the issuers, the actual trust-bundle selectors, and the
+certificate controller's Secret namespace before creating anything.
+It creates only the missing current-CA copies, with the active-CA labels
+selected by the existing trust bundles. Existing unowned or changed copies
+are never overwritten. A partial retry can revalidate this deployment's copies.
+The helper requires at least 24 hours of CA validity and verifies issuer
+readiness and actual CA propagation to selected trust-bundle ConfigMaps.
+Public fingerprints, expiry, and the outcome are saved in
+`artifacts\<Name>-certificate-repair.log`; private keys never leave the VM.
+
+**This changes extension-owned certificate lifecycle resources and is not a
+production fix or a demonstration of automatic CA rotation.** The copied CA
+material does not track future changes to the source Secrets; 24 hours of
+remaining CA validity is a precondition, not a guaranteed safe operating window.
+Use a fresh environment for a short rehearsal/presentation and tear it down
+afterward. Do not use it for a customer's actual telemetry or PKI.
+Microsoft documents [automated certificate lifecycle and rotation](https://learn.microsoft.com/azure/azure-monitor/data-collection/pipeline-tls-automated);
+the copy-and-label workaround itself is not a documented Microsoft procedure.
+[BYOC](https://learn.microsoft.com/azure/azure-monitor/data-collection/pipeline-tls-custom)
+remains an unverified fallback if the scoped repair cannot unblock provisioning.
+
 ## Rehearse and validate
 
 ```powershell
@@ -217,11 +256,13 @@ Pass the returned GUID as `-CustomLocationsOid`. The fixed application ID is
 **not** the tenant-specific object ID and cannot be substituted for it.
 
 If the certificate readiness check fails, inspect the returned ClusterIssuer
-conditions. Extension `Succeeded` alone is insufficient. In the latest attempt,
+conditions. Extension `Succeeded` alone is insufficient. In the initial attempts,
 cert-manager reported `ErrGetKeyPair` for the missing managed current-CA secrets,
-despite successful issuance of the root certificates. Resolve this certificate
-initialization issue with Azure support before another customer rehearsal.
-Do not manually copy private keys or patch managed issuers to mask the failure.
+despite successful issuance of the root certificates. The optional, guarded
+demo repair above targets only this exact failure and requires explicit consent.
+Do not patch managed issuers or hide repair failures. For a supported long-lived
+installation, investigate the underlying lifecycle problem with Microsoft;
+the demo workaround is not a substitute for that resolution.
 
 If deployment or ingestion fails live, show the last successful rehearsal's
 saved run ID and source configuration. Export screenshots or a short recording

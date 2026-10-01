@@ -10,6 +10,9 @@ Unique short lowercase name; resources live in rg-<Name>.
 Presenter's public IPv4 address followed by /32. Only SSH is exposed.
 .PARAMETER SubscriptionId
 Explicit Azure subscription, defaulting to the current Azure CLI subscription.
+.PARAMETER AllowDemoCertificateRepair
+Explicitly permit the temporary missing-current-CA repair on this invocation.
+For disposable demos only; does not fix automatic CA rotation.
 .EXAMPLE
 .\scripts\Deploy-Demo.ps1 -Name ampdemo01 -AdminCidr 203.0.113.10/32
 .OUTPUTS
@@ -20,6 +23,7 @@ param(
     [ValidatePattern('^[a-z][a-z0-9-]{3,17}$')][string]$Name = 'ampdemo01',
     [ValidatePattern('^\d{1,3}(\.\d{1,3}){3}/32$')][string]$AdminCidr = '127.0.0.1/32',
     [switch]$UseRunCommand,
+    [switch]$AllowDemoCertificateRepair,
     [string]$SubscriptionId,
     [string]$VmSize = 'Standard_D4s_v6',
     [string]$PipelineVersion = '1.7.0',
@@ -182,6 +186,32 @@ try {
         throw 'Installed pipeline version/train differs from recorded version. Refusing an implicit upgrade.'
     }
     if ($pipelineExtension.provisioningState -ne 'Succeeded') { throw 'Pipeline extension is not healthy.' }
+    if ($AllowDemoCertificateRepair) {
+        if ($pipelineExtension.version -ne '1.7.0' -or $certificate.version -ne '1.2.0' -or
+            $state.ownershipId -notmatch '^[a-f0-9-]{36}$') {
+            throw 'Demo certificate repair requires pipeline 1.7.0, Certificate Manager 1.2.0, and valid deployment ownership.'
+        }
+        Write-Warning 'AllowDemoCertificateRepair permits a temporary CA-secret repair, not automatic CA rotation. Recreate this disposable environment before presenting.'
+        # Give ordinary managed initialization its normal readiness window first.
+        Invoke-DemoSsh $state @'
+if ! sudo k3s kubectl wait --for=condition=Ready clusterissuer arc-amp-root-ca-cluster-issuer arc-amp-client-root-ca-cluster-issuer --timeout=180s; then
+    echo 'Managed issuers are unready; checking eligibility for the explicitly approved demo repair.'
+fi
+'@ | Out-Host
+        $repair = @(Invoke-DemoSsh $state "sudo python3 /home/demoadmin/demo/scripts/linux/repair_certificates.py --allow-demo-repair --ownership-id '$($state.ownershipId)' --pipeline-version 1.7.0 --certificate-version 1.2.0")
+        $repair | Set-Content (Join-Path $artifacts "$Name-certificate-repair.log") -Encoding utf8NoBOM
+        $repair | Out-Host
+    } else {
+        Invoke-DemoSsh $state @'
+set -eu
+secrets=$(sudo k3s kubectl get secrets -n cert-manager -o json) || exit 1
+count=$(printf '%s' "$secrets" | jq -er '[.items[] | select(.metadata.annotations["pipeline-demo.local/certificate-repair-owner"] != null)] | length') || exit 1
+if [ "$count" -gt 0 ]; then
+    echo 'This cluster contains demo-repaired CA secrets. Explicitly pass AllowDemoCertificateRepair to revalidate them or recreate the environment.' >&2
+    exit 1
+fi
+'@ | Out-Host
+    }
     # Extension provisioning can succeed while its managed certificate issuers are unready.
     Invoke-DemoSsh $state @'
 if ! sudo k3s kubectl wait --for=condition=Ready clusterissuer arc-amp-root-ca-cluster-issuer arc-amp-client-root-ca-cluster-issuer --timeout=180s; then

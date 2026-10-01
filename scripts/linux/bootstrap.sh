@@ -3,7 +3,7 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq nfs-kernel-server nfs-common curl python3 nftables jq
+apt-get install -y -qq nfs-kernel-server nfs-common curl python3 nftables jq openssl
 
 # Arc and certificate sidecars share the node's per-user inotify quota.
 if (( $(sysctl -n fs.inotify.max_user_instances) < 1024 )); then

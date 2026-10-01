@@ -72,6 +72,7 @@ function Get-SshArguments {
 
 function Invoke-DemoSsh {
     param($State, [string]$Command)
+    $Command = $Command.Replace("`r`n", "`n")
     if ($State.PSObject.Properties['useRunCommand'] -and $State.useRunCommand) {
         $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Command))
         $token = [guid]::NewGuid().ToString('N')
