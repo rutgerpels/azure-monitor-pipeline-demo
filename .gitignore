@@ -1,0 +1,52 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+.azure/
+secrets/
+*.pem
+*.key
+*.pfx
+*.p12
+*.kubeconfig
+
+# Infrastructure state and local parameters
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+!*.tfvars.json.example
+*.local.bicepparam
+*.local.parameters.json
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Generated outputs
+node_modules/
+dist/
+build/
+artifacts/
+*.log
+
+# Editor and operating-system files
+.idea/
+.vscode/*.local.json
+*.swp
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
