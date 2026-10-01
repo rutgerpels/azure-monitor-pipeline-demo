@@ -20,7 +20,6 @@ Optionally include an OTLP log client as a fifth scene, labelled as preview.
 ## Constraints
 
 - Azure region: West Europe.
-- Keep it minimal and cheap: a single small Kubernetes cluster is fine. Prefer a supported lightweight distribution.
 - Everything as code (Bicep or Terraform plus shell/PowerShell), with a single deploy script, a single teardown script, and a README with the demo run-book (step-by-step for each scene, including the exact commands and KQL queries to run live).
 - Include saved KQL queries for each scene and a fallback plan if something fails live.
 - Use current Microsoft Learn documentation for Azure Monitor pipeline as the source of truth for prerequisites, supported configurations and GA/preview status. Do not rely on memory.
