@@ -18,12 +18,15 @@ continuing. Offline tests are not a substitute for a successful live rehearsal.
 
 ## Architecture and scope
 
-```text
-Host-side Python switch/firewall simulator
-  -> private node ports -> Traefik -> pipeline receiver
-  -> built-in Syslog/CEF parsing -> optional local KQL filter/reshape
-  -> local NFS persistent buffer -> DCE -> DCR -> Log Analytics
-```
+[![Azure Monitor pipeline demo architecture: simulated network devices feed three local pipeline flows on one K3s VM, with persistent buffering, an outbound fault boundary, and a Log Analytics destination.](docs/architecture.svg)](docs/architecture.svg)
+
+[Open the full-size, editable SVG](docs/architecture.svg).
+The drawing shows the architecture defined in code, not a currently running
+deployment. Numbered badges identify the four demo scenes; solid arrows show
+telemetry/storage paths and dashed blue arrows show health or management paths.
+The three ingestion inputs are separate finite replays, not an always-on
+duplicated stream. Unlike a multi-site production architecture, this demo uses
+one simulated site and does not deploy OTLP clients, dashboards, or alert rules.
 
 The Azure VM simulates an on-premises site; it is not itself on premises.
 The single node and its locally hosted NFS server are intentionally not highly
