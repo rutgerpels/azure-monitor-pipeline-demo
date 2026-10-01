@@ -1,0 +1,9 @@
+let runId = "<RUN_ID>";
+Syslog
+| extend Data = parse_json(SyslogMessage)
+| where tostring(Data.runId) == strcat(runId, "-outage")
+| extend Sequence = tolong(Data.sequence), Ingested = ingestion_time()
+| project Sequence, Device = HostName, EventTime = TimeGenerated, Ingested,
+    DelaySeconds = datetime_diff("second", Ingested, TimeGenerated)
+| order by Sequence asc
+// Reconcile exact IDs against the local manifest; do not use approximate dcount.

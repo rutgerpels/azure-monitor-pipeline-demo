@@ -1,0 +1,38 @@
+deployment:
+  replicas: 1
+providers:
+  kubernetesIngress:
+    enabled: false
+  kubernetesCRD:
+    enabled: true
+    labelSelector: demo-gateway=pipeline
+service:
+  type: NodePort
+ports:
+  web:
+    expose:
+      default: false
+  websecure:
+    expose:
+      default: false
+  baseline:
+    port: 1514
+    exposedPort: 1514
+    nodePort: 30514
+    protocol: TCP
+    expose:
+      default: true
+  cef:
+    port: 1515
+    exposedPort: 1515
+    nodePort: 30515
+    protocol: TCP
+    expose:
+      default: true
+  filtered:
+    port: 1516
+    exposedPort: 1516
+    nodePort: 30516
+    protocol: TCP
+    expose:
+      default: true
