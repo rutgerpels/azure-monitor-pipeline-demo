@@ -1,0 +1,18 @@
+let pipelineName = "<PIPELINE_NAME>";
+let pipelineExtensionResourceId = "<PIPELINE_EXTENSION_RESOURCE_ID>";
+Heartbeat
+| where TimeGenerated > ago(5m) and _ResourceId =~ pipelineExtensionResourceId
+| where Computer startswith strcat(pipelineName, "-statefulset-")
+| summarize LastSeen = max(TimeGenerated), Heartbeats = count() by Computer, Version
+;
+let pipelineResourceId = "<PIPELINE_RESOURCE_ID>";
+AzureMetrics
+| where TimeGenerated > ago(30m) and _ResourceId =~ pipelineResourceId
+| where MetricName in ("process_cpu_utilization", "process_memory_usage", "process_uptime")
+| project TimeGenerated, MetricName, Average, Maximum, UnitName
+| order by TimeGenerated desc
+;
+AzureMonitorPipelineLogErrors
+| where TimeGenerated > ago(1h)
+| take 50
+// The errors table might not exist until the first error. No rows is not proof of health.

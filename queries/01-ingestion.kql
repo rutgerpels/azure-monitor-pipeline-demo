@@ -1,0 +1,12 @@
+let runId = "<RUN_ID>";
+union
+    (Syslog
+    | extend Data = parse_json(SyslogMessage)
+    | where tostring(Data.runId) == strcat(runId, "-syslog")
+    | project TimeGenerated, Device = HostName, Sequence = tolong(Data.sequence),
+        Format = "Syslog", Detail = SyslogMessage),
+    (CommonSecurityLog
+    | where DeviceCustomString1 == strcat(runId, "-cef")
+    | project TimeGenerated, Device = DeviceName, Sequence = tolong(FieldDeviceCustomNumber1),
+        Format = "CEF", Detail = strcat(DeviceVendor, "/", DeviceProduct, ": ", Activity))
+| order by Format asc, Sequence asc

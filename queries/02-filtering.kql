@@ -1,0 +1,15 @@
+let runId = "<RUN_ID>";
+let before = Syslog
+    | extend Data = parse_json(SyslogMessage)
+    | where tostring(Data.runId) == strcat(runId, "-before")
+    | summarize RecordsBefore = count(), BytesBefore = sum(_BilledSize);
+let after = NetworkDemoFiltered_CL
+    | where RunId == strcat(runId, "-after")
+    | summarize RecordsAfter = count(), BytesAfter = sum(_BilledSize);
+before
+| extend JoinKey = 1
+| join kind=inner (after | extend JoinKey = 1) on JoinKey
+| project RecordsBefore, RecordsAfter, BytesBefore, BytesAfter,
+    RecordReductionPercent = 100.0 * (RecordsBefore - RecordsAfter) / RecordsBefore,
+    IngestionSizeReductionPercent = 100.0 * (BytesBefore - BytesAfter) / BytesBefore
+// _BilledSize measures ingested record size, not TCP bytes or invoice savings.
