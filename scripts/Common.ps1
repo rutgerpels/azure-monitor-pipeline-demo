@@ -150,13 +150,20 @@ function Read-DemoRemoteJson {
 
 function Invoke-DemoQuery {
     param($State, [string]$Query, [switch]$AllowMissingTable)
-    try {
-        Invoke-Azure @('monitor', 'log-analytics', 'query', '--workspace', $State.workspaceCustomerId,
-            '--analytics-query', $Query, '--timespan', 'PT2H', '--subscription', $State.subscriptionId)
-    } catch {
-        if ($AllowMissingTable -and $_.Exception.Message -match "(?i)failed to resolve table.*(?:Syslog|CommonSecurityLog|NetworkDemoFiltered_CL|Heartbeat|AzureMetrics)") {
-            Write-Verbose "Waiting for first-ingestion table creation: $($_.Exception.Message)"
-        } else { throw }
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            return Invoke-Azure @('monitor', 'log-analytics', 'query', '--workspace', $State.workspaceCustomerId,
+                '--analytics-query', $Query, '--timespan', 'PT2H', '--subscription', $State.subscriptionId)
+        } catch {
+            if ($AllowMissingTable -and $_.Exception.Message -match "(?i)failed to resolve table.*(?:Syslog|CommonSecurityLog|NetworkDemoFiltered_CL|Heartbeat|AzureMetrics)") {
+                Write-Verbose "Waiting for first-ingestion table creation: $($_.Exception.Message)"
+                return
+            }
+            if ($attempt -lt 3 -and $_.Exception.Message -match '(?i)ConnectionResetError|Connection aborted|Read timed out') {
+                Write-Warning "Log Analytics query transport failed (attempt $attempt of 3); retrying the read: $($_.Exception.Message)"
+                Start-Sleep -Seconds (5 * $attempt)
+            } else { throw }
+        }
     }
 }
 

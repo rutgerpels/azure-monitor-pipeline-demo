@@ -7,9 +7,9 @@ Ingestion, Filtering, Backfill, Health, or All.
 .PARAMETER StatePath
 Deployment state written by Deploy-Demo.ps1.
 .PARAMETER RestartCollector
-Restart the collector during the outage to additionally test durable storage.
+Optional stress test with known incomplete recovery; not part of the customer demo.
 .EXAMPLE
-.\scripts\Test-Demo.ps1 -Scene All -RestartCollector
+.\scripts\Test-Demo.ps1 -Scene All -Count 100
 .OUTPUTS
 Evidence file path. A failed run never writes status Passed.
 #>
@@ -22,6 +22,9 @@ param(
     [switch]$RestartCollector
 )
 . "$PSScriptRoot\Common.ps1"
+if ($RestartCollector) {
+    Write-Warning 'RestartCollector is an additional stress test, not the connectivity-loss demo. A live rehearsal showed incomplete recovery; see README limitations before using it.'
+}
 $state = Read-DemoState $StatePath
 $run = 'demo-' + (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss') + '-' + ([guid]::NewGuid().ToString('N').Substring(0,6))
 $evidence = [ordered]@{ runId=$run; startedUtc=[datetime]::UtcNow.ToString('o'); scene=$Scene; status='Running'; checks=@() }
@@ -40,7 +43,7 @@ function Get-RecordQuery {
     param([string]$RunId, [string]$Table)
     switch ($Table) {
         'Syslog' { "Syslog | where TimeGenerated > ago(2h) | extend p=parse_json(SyslogMessage) | where tostring(p.runId)=='$RunId' | project Sequence=tolong(p.sequence), Device=HostName, Bytes=_BilledSize, EventTime=TimeGenerated, Ingested=ingestion_time()" }
-        'CommonSecurityLog' { "CommonSecurityLog | where TimeGenerated > ago(2h) | where DeviceCustomString1=='$RunId' | project Sequence=tolong(DeviceCustomNumber1), Device=DeviceName, Vendor=DeviceVendor, Product=DeviceProduct, Bytes=_BilledSize, EventTime=TimeGenerated, Ingested=ingestion_time()" }
+        'CommonSecurityLog' { "CommonSecurityLog | where TimeGenerated > ago(2h) | where DeviceCustomString1=='$RunId' | project Sequence=tolong(FieldDeviceCustomNumber1), Device=DeviceName, Vendor=DeviceVendor, Product=DeviceProduct, Bytes=_BilledSize, EventTime=TimeGenerated, Ingested=ingestion_time()" }
         'NetworkDemoFiltered_CL' { "NetworkDemoFiltered_CL | where TimeGenerated > ago(2h) and RunId=='$RunId' | project Sequence, Device, Message, Bytes=_BilledSize, EventTime=TimeGenerated, Ingested=ingestion_time()" }
     }
 }
@@ -104,15 +107,16 @@ try {
         if ($manifest.sentRecords -ne $Count) { throw 'Incomplete outage batch.' }
         Save-DemoJson $manifest (Join-Path $state.artifactsPath "$run-outage-manifest.json")
         $recovered = Wait-DemoRecords "$run-outage" Syslog (1..$Count)
-        $boundary = [datetime]::Parse($evidence.outage.restoredUtc).ToUniversalTime().AddSeconds(-2)
-        if (@($recovered.records | Where-Object { [datetime]::Parse($_.Ingested).ToUniversalTime() -lt $boundary }).Count) {
+        $boundary = ([datetime]$evidence.outage.restoredUtc).ToUniversalTime().AddSeconds(-2)
+        if (@($recovered.records | Where-Object { ([datetime]$_.Ingested).ToUniversalTime() -lt $boundary }).Count) {
             throw 'Records were ingested before restoration (two-second clock tolerance). Isolation was ineffective.'
         }
     }
     if ($Scene -in @('Health','All')) {
         $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSeconds)
+        $extensionId = "/subscriptions/$($state.subscriptionId)/resourceGroups/$($state.resourceGroup)/providers/Microsoft.Kubernetes/connectedClusters/$($state.name)-arc/providers/Microsoft.KubernetesConfiguration/extensions/pipeline-controller"
         do {
-            $heartbeat = @(Invoke-DemoQuery $state "Heartbeat | where TimeGenerated > ago(5m) and OSMajorVersion == '$($state.pipelineName)' | summarize LastSeen=max(TimeGenerated), Records=count()" -AllowMissingTable)
+            $heartbeat = @(Invoke-DemoQuery $state "Heartbeat | where TimeGenerated > ago(5m) and _ResourceId =~ '$extensionId' and Computer startswith '$($state.pipelineName)-statefulset-' | summarize LastSeen=max(TimeGenerated), Records=count()" -AllowMissingTable)
             $metrics = @(Invoke-DemoQuery $state "AzureMetrics | where TimeGenerated > ago(30m) and _ResourceId =~ '$($state.pipelineId)' | where MetricName in ('process_cpu_utilization','process_memory_usage','process_uptime') | summarize Samples=count() by MetricName" -AllowMissingTable)
             if ($heartbeat.Count -and $heartbeat[0].Records -gt 0 -and $metrics.Count -eq 3) { break }
             Start-Sleep -Seconds 20

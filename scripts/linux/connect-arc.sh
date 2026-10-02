@@ -13,11 +13,11 @@ if ! command -v az >/dev/null; then
     rm -f "$installer"
 fi
 az extension add --name connectedk8s --only-show-errors
-az login --identity --allow-no-subscriptions --output none
 trap 'az account clear' EXIT
-# Role propagation can lag VM identity creation.
+# Refresh the subscription cache as well as retrying access after a temporary role grant.
 for attempt in {1..24}; do
-    if az group show --name "$group" --subscription "$subscription" --output none; then break; fi
+    if az login --identity --allow-no-subscriptions --output none &&
+        az group show --name "$group" --subscription "$subscription" --output none; then break; fi
     (( attempt < 24 )) || exit 1
     sleep 10
 done

@@ -17,6 +17,13 @@ cleanup() {
 }
 trap cleanup EXIT
 kc() { k3s kubectl "$@"; }
+collector_pid() {
+    local current_uid sandbox
+    current_uid=$(kc get pod "$pod" -n pipeline-demo -o jsonpath='{.metadata.uid}')
+    sandbox=$(k3s crictl pods --name "^$pod$" -o json |
+        jq -er --arg uid "$current_uid" '[.items[] | select(.state == "SANDBOX_READY" and .metadata.uid == $uid and .metadata.namespace == "pipeline-demo")] | if length == 1 then .[0].id else error("Expected one ready sandbox for the current collector UID") end')
+    k3s crictl inspectp "$sandbox" | jq -er '.info.pid'
+}
 pod=$(kc get pods -n pipeline-demo -l "pipeline=$pipeline" -o json |
     jq -er '[.items[] | select(.status.phase == "Running")] | if length == 1 then .[0].metadata.name else error("Expected one running collector") end')
 uid=$(kc get pod "$pod" -n pipeline-demo -o jsonpath='{.metadata.uid}')
@@ -26,8 +33,7 @@ kc get pvc "$claim" -n pipeline-demo -o json |
     jq -e '.status.phase == "Bound" and .spec.volumeName == "pipeline-buffer"' >/dev/null
 volume=$(jq -er --arg claim "$claim" '.spec.volumes[] | select(.persistentVolumeClaim.claimName == $claim) | .name' <<<"$pod_json")
 jq -e --arg volume "$volume" '[.spec.containers[].volumeMounts[] | select(.name == $volume)] | length > 0' <<<"$pod_json" >/dev/null
-sandbox=$(k3s crictl pods --name "^$pod$" -q)
-pid=$(k3s crictl inspectp "$sandbox" | jq -er '.info.pid')
+pid=$(collector_pid)
 host=${endpoint#https://}
 host=${host%%/*}
 ip=$(getent ahostsv4 "$host" | awk 'NR == 1 {print $1}')
@@ -67,8 +73,7 @@ if [[ "$restart" == true ]]; then
 fi
 bash "$outage" status "$generation" >/dev/null
 pod=$(kc get pods -n pipeline-demo -l "pipeline=$pipeline" -o jsonpath='{.items[0].metadata.name}')
-sandbox=$(k3s crictl pods --name "^$pod$" -q)
-pid=$(k3s crictl inspectp "$sandbox" | jq -er '.info.pid')
+pid=$(collector_pid)
 rc=0
 nsenter -t "$pid" -n "${probe[@]}" || rc=$?
 [[ "$rc" == 7 ]] || { echo 'Collector regained egress before restoration' >&2; exit 1; }

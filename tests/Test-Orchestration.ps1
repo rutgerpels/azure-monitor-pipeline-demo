@@ -20,6 +20,65 @@ Assert-True $rejected 'SSH resume accepted the HTTPS-only loopback sentinel.'
 Assert-DemoManagementAccess $true '127.0.0.1/32'
 Assert-DemoManagementAccess $false '203.0.113.10/32'
 
+$testAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path $PSScriptRoot '..\scripts\Test-Demo.ps1'), [ref]$null, [ref]$null)
+$queryFunction = $testAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Get-RecordQuery'
+}, $true)
+. ([scriptblock]::Create($queryFunction.Extent.Text))
+$cefQuery = Get-RecordQuery 'demo-regression-cef' CommonSecurityLog
+Assert-True ($cefQuery.Contains('Sequence=tolong(FieldDeviceCustomNumber1)')) 'CEF validation must use the populated replacement numeric field.'
+$savedQuery = Get-Content (Join-Path $PSScriptRoot '..\queries\01-ingestion.kql') -Raw
+Assert-True ($savedQuery.Contains('Sequence = tolong(FieldDeviceCustomNumber1)')) 'Saved CEF query must match live validation.'
+
+$heartbeatQuery = $testAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.CommandAst] -and
+        $node.GetCommandName() -eq 'Invoke-DemoQuery' -and $node.Extent.Text.Contains('"Heartbeat |')
+}, $true).Extent.Text
+Assert-True ($heartbeatQuery.Contains('_ResourceId =~') -and $heartbeatQuery.Contains("Computer startswith") -and
+    -not $heartbeatQuery.Contains('OSMajorVersion')) 'Heartbeat must identify this extension and collector, not the OS version.'
+
+$boundaryAssignment = $testAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+        $node.Left.Extent.Text -eq '$boundary'
+}, $true)
+$isolationCheck = $testAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.IfStatementAst] -and
+        $node.Clauses[0].Item1.Extent.Text.Contains('$recovered.records')
+}, $true)
+$boundaryScript = [scriptblock]::Create($boundaryAssignment.Extent.Text)
+$isolationScript = [scriptblock]::Create($isolationCheck.Extent.Text)
+$culture = [Globalization.CultureInfo]::CurrentCulture
+try {
+    foreach ($cultureName in @('en-US','nl-NL')) {
+        [Globalization.CultureInfo]::CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo($cultureName)
+        $evidence = @{ outage = @{ restoredUtc = '2026-10-01T20:46:01.050090684Z' } }
+        . $boundaryScript
+        foreach ($ingested in @('2026-10-01T20:46:15.3592651Z', [datetime]'2026-10-01T20:46:15.3592651Z')) {
+            $recovered = @{ records = @(@{ Ingested = $ingested }) }
+            . $isolationScript
+        }
+        $recovered = @{ records = @(@{ Ingested = [datetime]'2026-10-01T20:45:00Z' }) }
+        $rejected = $false
+        try { . $isolationScript } catch { $rejected = $_.Exception.Message -like 'Records were ingested before restoration*' }
+        Assert-True $rejected 'Actual pre-restoration ingestion was accepted.'
+    }
+} finally {
+    [Globalization.CultureInfo]::CurrentCulture = $culture
+}
+
+$template = (Invoke-Native bicep @('build', (Join-Path $PSScriptRoot '..\infra\pipeline.bicep'), '--stdout')) -join "`n" | ConvertFrom-Json
+$pipeline = $template.resources | Where-Object type -eq 'Microsoft.Monitor/pipelineGroups'
+$transform = ($pipeline.properties.processors | Where-Object name -eq 'filter-reshape').transformLanguage.transformStatement
+foreach ($key in @('noise','runId','sequence','device','message')) {
+    Assert-True ($transform.Contains("payload['$key']")) "Local KQL must use bracket access for $key."
+}
+
 $deployAst = [System.Management.Automation.Language.Parser]::ParseFile(
     (Join-Path $PSScriptRoot '..\scripts\Deploy-Demo.ps1'), [ref]$null, [ref]$null)
 $cachedOidGuard = $deployAst.Find({
@@ -114,6 +173,24 @@ function Invoke-Azure { throw 'AuthorizationFailed: permission denied' }
 $rejected = $false
 try { Invoke-DemoQuery $state 'Syslog' -AllowMissingTable } catch { $rejected = $true }
 Assert-True $rejected 'Query authorization failure was hidden.'
+
+$script:queryAttempts = 0
+function Invoke-Azure {
+    $script:queryAttempts++
+    if ($script:queryAttempts -eq 1) { throw 'ConnectionResetError: connection aborted' }
+    [pscustomobject]@{ Records = 100 }
+}
+$retried = Invoke-DemoQuery $state 'Syslog | count' -WarningAction SilentlyContinue
+Assert-True ($retried.Records -eq 100 -and $script:queryAttempts -eq 2) 'Transient query failure was not retried.'
+
+$script:queryAttempts = 0
+function Invoke-Azure {
+    $script:queryAttempts++
+    throw 'Read timed out'
+}
+$rejected = $false
+try { Invoke-DemoQuery $state 'Syslog | count' } catch { $rejected = $_.Exception.Message -eq 'Read timed out' }
+Assert-True ($rejected -and $script:queryAttempts -eq 3) 'Exhausted query retries must fail after exactly three attempts.'
 
 $state | Add-Member bootstrapRoleId '/subscriptions/test-subscription/resourceGroups/test-group/providers/Microsoft.Authorization/roleAssignments/00000000-0000-0000-0000-000000000001'
 $script:assignmentExists = $true

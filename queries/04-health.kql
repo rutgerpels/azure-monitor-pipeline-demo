@@ -1,7 +1,9 @@
 let pipelineName = "<PIPELINE_NAME>";
+let pipelineExtensionResourceId = "<PIPELINE_EXTENSION_RESOURCE_ID>";
 Heartbeat
-| where TimeGenerated > ago(30m) and OSMajorVersion == pipelineName
-| summarize LastSeen = max(TimeGenerated), Heartbeats = count() by Computer, OSMajorVersion
+| where TimeGenerated > ago(5m) and _ResourceId =~ pipelineExtensionResourceId
+| where Computer startswith strcat(pipelineName, "-statefulset-")
+| summarize LastSeen = max(TimeGenerated), Heartbeats = count() by Computer, Version
 ;
 let pipelineResourceId = "<PIPELINE_RESOURCE_ID>";
 AzureMetrics

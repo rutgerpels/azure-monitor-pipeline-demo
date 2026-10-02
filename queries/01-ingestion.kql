@@ -7,6 +7,6 @@ union
         Format = "Syslog", Detail = SyslogMessage),
     (CommonSecurityLog
     | where DeviceCustomString1 == strcat(runId, "-cef")
-    | project TimeGenerated, Device = DeviceName, Sequence = tolong(DeviceCustomNumber1),
+    | project TimeGenerated, Device = DeviceName, Sequence = tolong(FieldDeviceCustomNumber1),
         Format = "CEF", Detail = strcat(DeviceVendor, "/", DeviceProduct, ": ", Activity))
 | order by Format asc, Sequence asc

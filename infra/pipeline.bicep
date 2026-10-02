@@ -80,7 +80,7 @@ resource pipeline 'Microsoft.Monitor/pipelineGroups@2026-04-01' = {
         name: 'filter-reshape'
         type: 'TransformLanguage'
         transformLanguage: {
-          transformStatement: 'source | extend payload = parse_json(SyslogMessage) | where tobool(payload.noise) == false | project TimeGenerated, RunId = tostring(payload.runId), Sequence = tolong(payload.sequence), Device = tostring(payload.device), Message = tostring(payload.message)'
+          transformStatement: 'source | extend payload = parse_json(SyslogMessage) | where tobool(payload[\'noise\']) == false | project TimeGenerated, RunId = tostring(payload[\'runId\']), Sequence = tolong(payload[\'sequence\']), Device = tostring(payload[\'device\']), Message = tostring(payload[\'message\'])'
         }
       }
     ]

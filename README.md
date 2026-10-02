@@ -7,17 +7,31 @@ table available. There are no agents on the simulated switches or firewalls.
 
 > Deployment and live verification status is recorded in `artifacts\`.
 > A successful ARM deployment alone does not mean the demo works.
-> Use `Test-Demo.ps1 -Scene All -RestartCollector` before presenting.
+> Use `Test-Demo.ps1 -Scene All` before presenting. See the separate
+> collector-restart limitation below.
 
-**Live validation status (2026-10-01): blocked, not presentation-ready.**
-The directory-permission blocker is resolved. The West Europe foundation,
-K3s/NFS, Arc connectivity, Custom Locations, certificate extension `1.2.0`,
-pipeline extension `1.7.0`, and DCE/DCR were deployed successfully. Pipeline
-creation remains blocked: its root CA certificates are Ready, but the managed
-`arc-amp-root-ca-current` and `arc-amp-client-root-ca-current` secrets are missing,
-leaving their ClusterIssuers unready. An operator restart did not resolve this.
-All four end-to-end scenes remain unverified. Diagnostics are saved locally;
-the failed disposable deployment was removed to avoid ongoing charges.
+**Live validation status (2026-10-01): certificate blocker resolved; not yet
+presentation-ready.** The explicitly approved, guarded certificate repair
+unblocked pipeline provisioning in `rg-ampdemo1001r`. Both CA issuers and trust
+bundles became ready; the collector and NodePort gateway were operational.
+BYOC was not needed or tested.
+
+The final `-Scene All -Count 100` rehearsal (`demo-20261001211625-082e27`)
+**failed**: Syslog and CEF each reconciled all 100 records without duplicates,
+and the filtering baseline reconciled 100 records, but all 30 expected filtered
+records remained missing at timeout. That run did not reach backfill or health.
+The collector was still Ready, no demo outage rules remained, and the cause of
+the filtered-delivery stall is unresolved. Log Analytics also intermittently
+reset or timed out read requests; retries do not turn missing data into a pass.
+
+Earlier, separate runs verified 1,000 Syslog and 1,000 CEF records, local filtering
+from 1,000 to 300 records with 96.54% lower `_BilledSize`, and fresh heartbeat plus
+three GA runtime metrics. A connectivity-only batch recovered all 100 records,
+but its checker falsely failed due to a timestamp-culture bug, now fixed.
+The separate collector-restart stress test did not pass (details below).
+These partial results are **not** a successful four-scene rehearsal.
+Evidence remains in ignored `artifacts\`; ownership-checked teardown removed
+`rg-ampdemo1001r` and verified its absence to avoid ongoing charges.
 Offline tests are not a substitute for a successful live rehearsal.
 
 ## Architecture and scope
@@ -25,8 +39,8 @@ Offline tests are not a substitute for a successful live rehearsal.
 [![Azure Monitor pipeline demo architecture: simulated network devices feed three local pipeline flows on one K3s VM, with persistent buffering, an outbound fault boundary, and a Log Analytics destination.](docs/architecture.svg)](docs/architecture.svg)
 
 [Open the full-size, editable SVG](docs/architecture.svg).
-The drawing shows the architecture defined in code, not a currently running
-deployment. Numbered badges identify the four demo scenes; solid arrows show
+The drawing shows the architecture deployed during the rehearsal, not proof of
+end-to-end readiness. Numbered badges identify the four demo scenes; solid arrows show
 telemetry/storage paths and dashed blue arrows show health or management paths.
 The three ingestion inputs are separate finite replays, not an always-on
 duplicated stream. Unlike a multi-site production architecture, this demo uses
@@ -91,6 +105,8 @@ az extension add --name log-analytics
 
 K3s is pinned to `v1.33.3+k3s1`, a version explicitly listed by Microsoft Learn.
 Pipeline defaults to `1.7.0`, Helm to `3.19.0`, and Traefik chart to `41.6.1`.
+That chart uses `service.spec.type: NodePort`; the older `service.type` setting
+is ignored and would leave Helm waiting for an unavailable LoadBalancer.
 The certificate extension version is discovered by its first deployment, recorded,
 and automatic upgrades disabled; pass `-CertificateVersion` on subsequent fresh
 deployments to reproduce it. The Ubuntu image resolves `latest` at initial
@@ -115,7 +131,8 @@ workstations that cannot reach SSH (including the development network):
 For lower-latency management on a network that permits SSH, replace
 `-UseRunCommand` with `-AdminCidr <your-public-IPv4>/32`. A corporate VPN/proxy can
 use a different address for SSH than HTTPS; never broaden the rule to the Internet.
-Run Command adds at least 20 seconds per operation and preserves longer output
+Run Command adds tens of seconds per operation (often about a minute in this
+environment) and preserves longer output
 in `/var/tmp/pipeline-demo-*.log`; JSON evidence transfers are length-checked.
 
 The script runs Bicep what-if before
@@ -179,7 +196,7 @@ remains an unverified fallback if the scoped repair cannot unblock provisioning.
 ```powershell
 python -m unittest discover -s tests
 .\tests\Test-Orchestration.ps1
-.\scripts\Test-Demo.ps1 -Scene All -RestartCollector -Verbose
+.\scripts\Test-Demo.ps1 -Scene All -Count 100 -Verbose
 ```
 
 A run produces `artifacts\demo-<timestamp>-<id>.json` plus sender manifests.
@@ -189,6 +206,12 @@ prove ingestion. The test fails on missing IDs, unexpected filtered records,
 incorrect parsing, ineffective isolation, or absent heartbeat/runtime metrics.
 
 Default batches have 1,000 records, of which exactly 700 are noise and 300 useful.
+The presentation commands use `-Count 100` (70 noise, 30 useful) to reduce
+HTTPS management/evidence-transfer latency; omit it for a larger rehearsal.
+With HTTPS Run Command, the latest four-scene attempt took about 24 minutes
+before failing in filtering. The schedule below is a target, not a verified
+15-minute live run. Budget for management and ingestion latency, and use
+explicitly labelled captured evidence if the live checks do not finish.
 Traffic is finite, approximately 100 records/second. Retention is 30 days and the
 workspace daily cap is 1 GB; the cap is an emergency guard, not a precise budget.
 The VM, disks, public IP, Log Analytics, and Sentinel may incur charges. Remove
@@ -201,19 +224,30 @@ rehearsal available because ingestion and metric export have asynchronous latenc
 Each scene command prints an evidence path; use its `runId` in the corresponding
 saved query. The individual scene tests can wait up to 15 minutes, so switch to
 the clearly identified rehearsal run rather than waiting through a live timeout.
+Read-only Log Analytics queries retry connection resets and read timeouts up to
+three times with warnings. Authorization and query errors still fail immediately;
+network retries can extend wall-clock verification beyond the scene deadline.
 
 | Time | Scene | Exact command | Evidence |
 | --- | --- | --- | --- |
-| 0-3 min | Agentless Syslog/CEF | `.\scripts\Test-Demo.ps1 -Scene Ingestion` | `queries\01-ingestion.kql`: named devices and parsed CEF vendor/product fields |
-| 3-7 min | Filter and reshape locally | `.\scripts\Test-Demo.ps1 -Scene Filtering` | `queries\02-filtering.kql`: 1,000 baseline versus 300 retained records; smaller ingested size |
-| 7-12 min | Outage and backfill | `.\scripts\Test-Demo.ps1 -Scene Backfill` | `queries\03-backfill.kql`: source times precede delayed ingestion; all IDs eventually arrive |
+| 0-3 min | Agentless Syslog/CEF | `.\scripts\Test-Demo.ps1 -Scene Ingestion -Count 100` | `queries\01-ingestion.kql`: named devices and parsed CEF vendor/product fields |
+| 3-7 min | Filter and reshape locally | `.\scripts\Test-Demo.ps1 -Scene Filtering -Count 100` | `queries\02-filtering.kql`: 100 baseline versus 30 retained records; smaller ingested size |
+| 7-12 min | Outage and backfill | `.\scripts\Test-Demo.ps1 -Scene Backfill -Count 100` | `queries\03-backfill.kql`: source times precede delayed ingestion; all IDs eventually arrive |
 | 12-15 min | Operate the pipeline | `.\scripts\Test-Demo.ps1 -Scene Health` | `queries\04-health.kql`: fresh heartbeat and three GA runtime metrics |
+
+CEF sequence IDs use `FieldDeviceCustomNumber1`, the replacement for the
+deprecated `DeviceCustomNumber1` column. The live pipeline populates the
+replacement field.
 
 For scene 2, inspect `infra\pipeline.bicep`: the `TransformLanguage` processor runs
 after local Syslog parsing and before export. The cloud DCR only passes data
 through. The reduced custom schema omits the 512-character padding field. The
 baseline is a separate finite replay, not an always-on unfiltered mirror.
 `_BilledSize` is ingestion size, not wire bytes or a quoted cost saving.
+The local processor uses bracket access (`payload['noise']`) for parsed JSON.
+On the tested pipeline `1.7.0`, a controlled probe returned values with bracket
+access but empty values with dot access (`payload.noise`), dropping every record.
+This concerns the local processor, not Log Analytics KQL.
 
 For scene 3, the local nftables rule blocks external traffic for both host and
 pods, including existing export connections. Local Kubernetes/NFS/Syslog traffic
@@ -227,11 +261,28 @@ collector network namespaces, with DNS resolved before isolation. Evidence
 includes rejected packet counters, bound/mounted PVC, changed buffer files, and
 collector UIDs. Ingestion before restoration fails verification (two-second
 clock tolerance). Backfill batches are limited to 3,000 records to fit the timer.
-Use `-RestartCollector` during rehearsal to test persistence through a pod restart.
+Do not restart the collector during the customer demo. The optional
+`-RestartCollector` switch is a separate stress test, not required for the
+connectivity-loss scene. It uses the replacement pod's UID and Ready sandbox
+to avoid probing a stale container network namespace.
+
+**Collector-restart limitation (2026-10-01):** an outage test with collector
+replacement recovered 863 of 1,000 records; sequences 798-934 were still absent
+when a subsequent Log Analytics query timed out. The original PVC was reused,
+and connectivity restoration was verified. This does not establish the cause
+or prove permanent loss, but restart durability has **not** passed. Keep its
+failed evidence separate from a successful connectivity-only rehearsal; do not
+claim that an outage-only pass validates collector restarts or upgrades.
 
 Health KQL contains separate query statements. Replace the pipeline name and
-resource ID from `artifacts\state.json`. Diagnostic error tables might not exist
-until an error occurs; an empty errors query is not proof of health.
+resource ID from your state file. The heartbeat query also needs the extension
+resource ID:
+`/subscriptions/<subscriptionId>/resourceGroups/<resourceGroup>/providers/Microsoft.Kubernetes/connectedClusters/<name>-arc/providers/Microsoft.KubernetesConfiguration/extensions/pipeline-controller`.
+Although Learn describes `OSMajorVersion` as the pipeline name, the tested
+`1.7.0` emits the container OS major version (`3`) there. Match both the extension
+resource ID and collector pod-name prefix instead; runtime metrics still use the
+pipeline resource ID. Diagnostic error tables might not exist until an error
+occurs; an empty errors query is not proof of health.
 
 ## Recovery and fallback
 
@@ -298,3 +349,5 @@ Reviewed against Microsoft Learn on 2026-10-01:
 - [VM Run Command restrictions](https://learn.microsoft.com/azure/virtual-machines/linux/run-command)
 - [Custom locations and explicit service object ID](https://learn.microsoft.com/azure/azure-arc/kubernetes/custom-locations)
 - [Single-node Ubuntu inotify limit guidance](https://learn.microsoft.com/azure/azure-arc/container-storage/quickstart-install)
+- [CommonSecurityLog columns and replacement numeric fields](https://learn.microsoft.com/azure/azure-monitor/reference/tables/commonsecuritylog#columns)
+- [Traefik chart 41.6.1 service configuration](https://github.com/traefik/traefik-helm-chart/blob/v41.6.1/traefik/values.yaml)
